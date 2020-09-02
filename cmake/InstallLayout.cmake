@@ -354,11 +354,6 @@ set(CPACK_RPM_CLIENTS-EL6_PRE_INSTALL_SCRIPT_FILE
 set(CPACK_RPM_clients-el7_PRE_INSTALL_SCRIPT_FILE
   ${CMAKE_SOURCE_DIR}/packaging/rpm/scripts/preclients.sh)
 
-set(CPACK_RPM_CLIENTS-EL6_POST_INSTALL_SCRIPT_FILE
-  ${CMAKE_SOURCE_DIR}/packaging/rpm/scripts/postclients.sh)
-set(CPACK_RPM_CLIENTS-EL7_POST_INSTALL_SCRIPT_FILE
-  ${CMAKE_SOURCE_DIR}/packaging/rpm/scripts/postclients.sh)
-
 set(CPACK_RPM_SERVER-EL6_PRE_INSTALL_SCRIPT_FILE
   ${CMAKE_SOURCE_DIR}/packaging/rpm/scripts/preserver.sh)
 set(CPACK_RPM_SERVER-EL7_PRE_INSTALL_SCRIPT_FILE
