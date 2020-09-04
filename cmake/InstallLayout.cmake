@@ -95,53 +95,86 @@ endfunction()
 
 # 'map' from (destination, package) to path
 # format vars like install_destination_for_${destination}_${package}
-set(install_destination_for_bin_tgz "bin")
-set(install_destination_for_bin_deb "usr/bin")
-set(install_destination_for_bin_el6 "usr/bin")
-set(install_destination_for_bin_el7 "usr/bin")
-set(install_destination_for_bin_pm "usr/local/bin")
-set(install_destination_for_sbin_tgz "sbin")
-set(install_destination_for_sbin_deb "usr/sbin")
-set(install_destination_for_sbin_el6 "usr/sbin")
-set(install_destination_for_sbin_el7 "usr/sbin")
-set(install_destination_for_sbin_pm "usr/local/libexec")
-set(install_destination_for_lib_tgz "lib")
-set(install_destination_for_lib_deb "usr/lib")
-set(install_destination_for_lib_el6 "usr/lib64")
-set(install_destination_for_lib_el7 "usr/lib64")
-set(install_destination_for_lib_pm "lib")
-set(install_destination_for_fdbmonitor_tgz "sbin")
-set(install_destination_for_fdbmonitor_deb "usr/lib/foundationdb")
-set(install_destination_for_fdbmonitor_el6 "usr/lib/foundationdb")
-set(install_destination_for_fdbmonitor_el7 "usr/lib/foundationdb")
-set(install_destination_for_fdbmonitor_pm "usr/local/libexec")
-set(install_destination_for_include_tgz "include")
-set(install_destination_for_include_deb "usr/include")
-set(install_destination_for_include_el6 "usr/include")
-set(install_destination_for_include_el7 "usr/include")
-set(install_destination_for_include_pm "usr/local/include")
-set(install_destination_for_etc_tgz "etc/foundationdb")
-set(install_destination_for_etc_deb "etc/foundationdb")
-set(install_destination_for_etc_el6 "etc/foundationdb")
-set(install_destination_for_etc_el7 "etc/foundationdb")
-set(install_destination_for_etc_pm "usr/local/etc/foundationdb")
-set(install_destination_for_log_tgz "log/foundationdb")
-set(install_destination_for_log_deb "var/log/foundationdb")
-set(install_destination_for_log_el6 "var/log/foundationdb")
-set(install_destination_for_log_el7 "var/log/foundationdb")
-set(install_destination_for_log_pm "")
-set(install_destination_for_data_tgz "lib/foundationdb")
-set(install_destination_for_data_deb "var/lib/foundationdb/data")
-set(install_destination_for_data_el6 "var/lib/foundationdb/data")
-set(install_destination_for_data_el7 "var/lib/foundationdb/data")
-set(install_destination_for_data_pm "")
+
+set(PACKAGE_FORMATS "tgz;deb;el6;el7;pm;${PROJECT_VERSION}")
+
+function(set_install_destinations_for)
+  set(i 1)
+  set(package_format ${ARGV0})
+  if(NOT package_format IN_LIST PACKAGE_FORMATS)
+    message(FATAL_ERROR "${package_format} is not supported. Supported formats are: ${PACKAGE_FORMATS}")
+  endif()
+  while(i LESS ARGC)
+    set(arg0 "${ARGV${i}}")
+    math(EXPR i "${i} + 1")
+    set(arg1 "${ARGV${i}}")
+    math(EXPR i "${i} + 1")
+    set(install_destination_for_${arg0}_${package_format} ${arg1} PARENT_SCOPE)
+  endwhile()
+endfunction()
+
+set_install_destinations_for(tgz
+  bin bin
+  sbin sbin
+  lib lib
+  fdbmonitor sbin
+  include include
+  etc etc/foundationdb
+  log log/foundationdb
+  data lib/foundationdb)
+set_install_destinations_for(${PROJECT_VERSION}
+  bin usr/lib/foundationdb-${PROJECT_VERSION}/bin
+  sbin usr/lib/foundationdb-${PROJECT_VERSION}/sbin
+  lib usr/lib/foundationdb-${PROJECT_VERSION}/lib
+  fdbmonitor usr/lib/foundationdb-${PROJECT_VERSION}/sbin
+  include usr/lib/foundationdb-${PROJECT_VERSION}/include
+  etc etc/foundationdb
+  log var/log/foundationdb
+  data var/lib/foundationdb/data)
+set_install_destinations_for(deb
+  bin usr/bin
+  sbin usr/sbin
+  lib usr/lib
+  fdbmonitor usr/lib/fdbmonitor
+  include usr/include
+  etc etc/foundationdb
+  log var/log/foundationdb
+  data var/lib/foundationdb/data
+  )
+set_install_destinations_for(el6
+  bin usr/bin
+  sbin usr/sbin
+  lib usr/lib64
+  fdbmonitor usr/lib/foundationdb
+  include usr/include
+  etc etc/foundationdb
+  log var/log/foundationdb
+  data var/lib/foundationdb)
+set_install_destinations_for(el7
+  bin usr/bin
+  sbin usr/sbin
+  lib usr/lib64
+  fdbmonitor usr/lib/foundationdb
+  include usr/include
+  etc etc/foundationdb
+  log var/log/foundationdb
+  data var/lib/foundationdb)
+set_install_destinations_for(pm
+  bin usr/local/bin
+  sbin usr/local/libexec
+  lib usr/local/lib
+  fdbmonitor usr/local/libexec
+  include usr/local/include
+  etc usr/local/etc/foundationdb
+  log ""
+  data "")
 
 set(generated_dir "${CMAKE_CURRENT_BINARY_DIR}/generated")
 function(fdb_configure_and_install)
   if(NOT WIN32 AND NOT OPEN_FOR_IDE)
     set(one_value_options COMPONENT DESTINATION FILE DESTINATION_SUFFIX)
     cmake_parse_arguments(IN "${options}" "${one_value_options}" "${multi_value_options}" "${ARGN}")
-    foreach(package tgz deb el6 el7 pm)
+    foreach(package tgz deb el6 el7 pm ${PROJECT_VERSION})
       set(INCLUDE_DIR "${install_destination_for_include_${package}}")
       set(LIB_DIR "${install_destination_for_lib_${package}}")
       set(install_path "${install_destination_for_${IN_DESTINATION}_${package}}")
@@ -177,8 +210,10 @@ function(fdb_install)
     else()
       message(FATAL_ERROR "Expected FILES, PROGRAMS, DIRECTORY, or TARGETS")
     endif()
-    foreach(package tgz deb el6 el7 pm)
+    foreach(package tgz deb el6 el7 pm ${PROJECT_VERSION})
       set(install_path "${install_destination_for_${IN_DESTINATION}_${package}}")
+      message(STATUS "install (${package}) ${ARGV}")
+      message(STATUS "install_path: ${install_path}")
       if(install_export)
         install(
           EXPORT "${IN_EXPORT}-${package}"
@@ -258,12 +293,14 @@ set(CPACK_COMPONENT_SERVER-EL7_DISPLAY_NAME "foundationdb-server")
 set(CPACK_COMPONENT_SERVER-DEB_DISPLAY_NAME "foundationdb-server")
 set(CPACK_COMPONENT_SERVER-TGZ_DISPLAY_NAME "foundationdb-server")
 set(CPACK_COMPONENT_SERVER-PM_DISPLAY_NAME "foundationdb-server")
+set(CPACK_COMPONENT_SERVER-${PROJECT_VERSION}_DISPLAY_NAME "foundationdb-server${PROJECT_VERSION}")
 
 set(CPACK_COMPONENT_CLIENTS-EL6_DISPLAY_NAME "foundationdb-clients")
 set(CPACK_COMPONENT_CLIENTS-EL7_DISPLAY_NAME "foundationdb-clients")
 set(CPACK_COMPONENT_CLIENTS-DEB_DISPLAY_NAME "foundationdb-clients")
 set(CPACK_COMPONENT_CLIENTS-TGZ_DISPLAY_NAME "foundationdb-clients")
 set(CPACK_COMPONENT_CLIENTS-PM_DISPLAY_NAME "foundationdb-clients")
+set(CPACK_COMPONENT_CLIENTS-${PROJECT_VERSION}_DISPLAY_NAME "foundationdb-clients${PROJECT_VERSION}")
 
 
 # MacOS needs a file exiension for the LICENSE file
@@ -293,6 +330,9 @@ set(rpm-server-filename "foundationdb-server-${PROJECT_VERSION}${prerelease_stri
 set(deb-clients-filename "foundationdb-clients_${PROJECT_VERSION}${prerelease_string}")
 set(deb-server-filename "foundationdb-server_${PROJECT_VERSION}${prerelease_string}")
 
+set(versioned-clients-filename "foundationdb-clients-${PROJECT_VERSION}-versioned-${prerelease_string}")
+set(versioned-server-filename "foundationdb-server-${PROJECT_VERSION}-versioned-${prerelease_string}")
+
 ################################################################################
 # Configuration for RPM
 ################################################################################
@@ -302,18 +342,23 @@ set(CPACK_RPM_PACKAGE_LICENSE "Apache 2.0")
 set(CPACK_RPM_PACKAGE_NAME "foundationdb")
 set(CPACK_RPM_CLIENTS-EL6_PACKAGE_NAME "foundationdb-clients")
 set(CPACK_RPM_CLIENTS-EL7_PACKAGE_NAME "foundationdb-clients")
+set(CPACK_RPM_CLIENTS-${PROJECT_VERSION}_PACKAGE_NAME "foundationdb-clients-${PROJECT_VERSION}")
 set(CPACK_RPM_SERVER-EL6_PACKAGE_NAME "foundationdb-server")
 set(CPACK_RPM_SERVER-EL7_PACKAGE_NAME "foundationdb-server")
+set(CPACK_RPM_SERVER-${PROJECT_VERSION}_PACKAGE_NAME "foundationdb-server-${PROJECT_VERSION}")
 
 set(CPACK_RPM_CLIENTS-EL6_FILE_NAME "${rpm-clients-filename}.el6.x86_64.rpm")
 set(CPACK_RPM_CLIENTS-EL7_FILE_NAME "${rpm-clients-filename}.el7.x86_64.rpm")
+set(CPACK_RPM_CLIENTS-${PROJECT_VERSION}_FILE_NAME "${versioned-clients-filename}.el7.x86_64.rpm")
 set(CPACK_RPM_SERVER-EL6_FILE_NAME "${rpm-server-filename}.el6.x86_64.rpm")
 set(CPACK_RPM_SERVER-EL7_FILE_NAME "${rpm-server-filename}.el7.x86_64.rpm")
+set(CPACK_RPM_SERVER-${PROJECT_VERSION}_FILE_NAME "${versioned-server-filename}.el7.x86_64.rpm")
 
 set(CPACK_RPM_CLIENTS-EL6_DEBUGINFO_FILE_NAME "${rpm-clients-filename}.el6-debuginfo.x86_64.rpm")
 set(CPACK_RPM_CLIENTS-EL7_DEBUGINFO_FILE_NAME "${rpm-clients-filename}.el7-debuginfo.x86_64.rpm")
 set(CPACK_RPM_SERVER-EL6_DEBUGINFO_FILE_NAME "${rpm-server-filename}.el6-debuginfo.x86_64.rpm")
 set(CPACK_RPM_SERVER-EL7_DEBUGINFO_FILE_NAME "${rpm-server-filename}.el7-debuginfo.x86_64.rpm")
+
 
 file(MAKE_DIRECTORY "${CMAKE_BINARY_DIR}/packaging/emptydir")
 fdb_install(DIRECTORY "${CMAKE_BINARY_DIR}/packaging/emptydir/" DESTINATION data COMPONENT server)
@@ -328,8 +373,10 @@ set(CPACK_RPM_SERVER-EL7_USER_FILELIST
   "%config(noreplace) /etc/foundationdb/foundationdb.conf"
   "%attr(0700,foundationdb,foundationdb) /var/log/foundationdb"
   "%attr(0700, foundationdb, foundationdb) /var/lib/foundationdb")
+set(CPACK_RPM_SERVER-${PROJECT_VERSION}_USER_FILELIST ${CPACK_RPM_SERVER-EL7_USER_FILELIST})
 set(CPACK_RPM_CLIENTS-EL6_USER_FILELIST "%dir /etc/foundationdb")
 set(CPACK_RPM_CLIENTS-EL7_USER_FILELIST "%dir /etc/foundationdb")
+set(CPACK_RPM_CLIENTS-${PROJECT_VERSION}_USER_FILELIST ${CPACK_RPM_CLIENTS-EL7_USER_FILELIST})
 set(CPACK_RPM_EXCLUDE_FROM_AUTO_FILELIST_ADDITION
   "/usr/sbin"
   "/usr/share/java"
@@ -353,6 +400,8 @@ set(CPACK_RPM_CLIENTS-EL6_PRE_INSTALL_SCRIPT_FILE
   ${CMAKE_SOURCE_DIR}/packaging/rpm/scripts/preclients.sh)
 set(CPACK_RPM_clients-el7_PRE_INSTALL_SCRIPT_FILE
   ${CMAKE_SOURCE_DIR}/packaging/rpm/scripts/preclients.sh)
+set(CPACK_RPM_clients-${PROJECT_VERSION}_PRE_INSTALL_SCRIPT_FILE
+  ${CMAKE_SOURCE_DIR}/packaging/rpm/scripts/preclients.sh)
 
 set(CPACK_RPM_SERVER-EL6_PRE_INSTALL_SCRIPT_FILE
   ${CMAKE_SOURCE_DIR}/packaging/rpm/scripts/preserver.sh)
@@ -373,6 +422,10 @@ set(CPACK_RPM_SERVER-EL6_PACKAGE_REQUIRES
   "foundationdb-clients = ${FDB_MAJOR}.${FDB_MINOR}.${FDB_PATCH}")
 set(CPACK_RPM_SERVER-EL7_PACKAGE_REQUIRES
   "foundationdb-clients = ${FDB_MAJOR}.${FDB_MINOR}.${FDB_PATCH}")
+
+set(CPACK_RPM_CLIENTS-${PROJECT_VERSION}_PACKAGE_REQUIRES
+  "foundationdb-clients-${PROJECT_VERSION} = ${FDB_MAJOR}.${FDB_MINOR}.${FDB_PATCH}, alternatives >= 1.0")
+set(CPACK_RPM_SERVER-${PROJECT_VERSION}_PACKAGE_REQUIRES "alternatives >= 1.0")
 #set(CPACK_RPM_java_PACKAGE_REQUIRES
 #  "foundationdb-clients = ${FDB_MAJOR}.${FDB_MINOR}.${FDB_PATCH}")
 #set(CPACK_RPM_python_PACKAGE_REQUIRES
@@ -384,6 +437,8 @@ set(CPACK_RPM_SERVER-EL7_PACKAGE_REQUIRES
 
 set(CPACK_DEBIAN_CLIENTS-DEB_FILE_NAME "${deb-clients-filename}_amd64.deb")
 set(CPACK_DEBIAN_SERVER-DEB_FILE_NAME "${deb-server-filename}_amd64.deb")
+set(CPACK_DEBIAN_CLIENTS-${PROJECT_VERSION}_FILE_NAME "${versioned-clients-filename}_amd64.deb")
+set(CPACK_DEBIAN_SERVER-${PROJECT_VERSION}_FILE_NAME "${versioned-server-filename}_amd64.deb")
 set(CPACK_DEB_COMPONENT_INSTALL ON)
 set(CPACK_DEBIAN_DEBUGINFO_PACKAGE ${GENERATE_DEBUG_PACKAGES})
 set(CPACK_DEBIAN_PACKAGE_SECTION "database")
@@ -395,6 +450,11 @@ set(CPACK_DEBIAN_CLIENTS-DEB_PACKAGE_NAME "foundationdb-clients")
 set(CPACK_DEBIAN_SERVER-DEB_PACKAGE_DEPENDS "adduser, libc6 (>= 2.12), foundationdb-clients (= ${FDB_VERSION})")
 set(CPACK_DEBIAN_SERVER-DEB_PACKAGE_RECOMMENDS "python (>= 2.6)")
 set(CPACK_DEBIAN_CLIENTS-DEB_PACKAGE_DEPENDS "adduser, libc6 (>= 2.12)")
+
+set(CPACK_DEBIAN_SERVER-${PROJECT_VERSION}_PACKAGE_DEPENDS "alternatives, adduser, libc6 (>= 2.12), foundationdb-clients (= ${FDB_VERSION})")
+set(CPACK_DEBIAN_SERVER-${PROJECT_VERSION}_PACKAGE_RECOMMENDS "alternatives, python (>= 2.6)")
+set(CPACK_DEBIAN_CLIENTS-${PROJECT_VERSION}_PACKAGE_DEPENDS "alternatives, adduser, libc6 (>= 2.12)")
+
 set(CPACK_DEBIAN_PACKAGE_HOMEPAGE "https://www.foundationdb.org")
 set(CPACK_DEBIAN_CLIENTS-DEB_PACKAGE_CONTROL_EXTRA
   ${CMAKE_SOURCE_DIR}/packaging/deb/DEBIAN-foundationdb-clients/postinst)
