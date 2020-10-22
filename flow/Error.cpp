@@ -29,11 +29,6 @@ using std::make_pair;
 
 bool g_crashOnError = false;
 
-std::map<int, int>& Error::errorCounts() {
-	static std::map<int, int> counts;
-	return counts;
-}
-
 #include <iostream>
 
 Error Error::fromUnvalidatedCode(int code) {
@@ -104,8 +99,6 @@ Error::Error(int error_code)
 			crashAndDie();
 		}
 	}
-	/*if (error_code)
-		errorCounts()[error_code]++;*/
 }
 
 ErrorCodeTable& Error::errorCodeTable() {
@@ -114,14 +107,14 @@ ErrorCodeTable& Error::errorCodeTable() {
 }
 
 const char* Error::name() const {
-	auto table = errorCodeTable();
+	const auto& table = errorCodeTable();
 	auto it = table.find(error_code);
 	if (it == table.end()) return "UNKNOWN_ERROR";
 	return it->second.first;
 }
 
 const char* Error::what() const {
-	auto table = errorCodeTable();
+	const auto& table = errorCodeTable();
 	auto it = table.find(error_code);
 	if (it == table.end()) return "UNKNOWN_ERROR";
 	return it->second.second;

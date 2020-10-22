@@ -12,7 +12,7 @@ endif()
 # SSL
 ################################################################################
 include(CheckSymbolExists)
- 
+
 set(DISABLE_TLS OFF CACHE BOOL "Don't try to find OpenSSL and always build without TLS support")
 if(DISABLE_TLS)
   set(WITH_TLS OFF)
@@ -107,11 +107,21 @@ endif()
 ################################################################################
 
 set(SSD_ROCKSDB_EXPERIMENTAL OFF CACHE BOOL "Build with experimental RocksDB support")
-if (SSD_ROCKSDB_EXPERIMENTAL)
+# RocksDB is currently enabled by default for GCC but does not build with the latest
+# Clang.
+if (SSD_ROCKSDB_EXPERIMENTAL OR GCC)
   set(WITH_ROCKSDB_EXPERIMENTAL ON)
 else()
   set(WITH_ROCKSDB_EXPERIMENTAL OFF)
 endif()
+
+################################################################################
+# TOML11
+################################################################################
+
+# TOML can download and install itself into the binary directory, so it should
+# always be available.
+find_package(TOML11)
 
 ################################################################################
 

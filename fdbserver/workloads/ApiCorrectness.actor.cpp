@@ -20,6 +20,7 @@
 
 #include "fdbserver/QuietDatabase.h"
 
+#include "fdbserver/MutationTracking.h"
 #include "fdbserver/workloads/workloads.actor.h"
 #include "fdbserver/workloads/ApiWorkload.h"
 #include "fdbserver/workloads/MemoryKeyValueStore.h"
@@ -91,6 +92,9 @@ public:
 	//The API being used by this client
 	TransactionType transactionType;
 
+	// Maximum time to reset DB to the original state
+	double resetDBTimeout;
+
 	ApiCorrectnessWorkload(WorkloadContext const& wcx) : ApiWorkload(wcx), numRandomOperations("Num Random Operations") {
 		numGets = getOption(options, LiteralStringRef("numGets"), 1000);
 		numGetRanges = getOption(options, LiteralStringRef("numGetRanges"), 100);
@@ -106,6 +110,8 @@ public:
 		int maxTransactionBytes = getOption(options, LiteralStringRef("maxTransactionBytes"), 500000);
 		maxKeysPerTransaction = std::max(1, maxTransactionBytes / (maxValueLength + maxLongKeyLength));
 
+		resetDBTimeout = getOption(options, LiteralStringRef("resetDBTimeout"), 1800.0);
+
 		if(maxTransactionBytes > 500000) {
 			TraceEvent("RemapEventSeverity").detail("TargetEvent", "LargePacketSent").detail("OriginalSeverity", SevWarnAlways).detail("NewSeverity", SevInfo);
 			TraceEvent("RemapEventSeverity").detail("TargetEvent", "LargePacketReceived").detail("OriginalSeverity", SevWarnAlways).detail("NewSeverity", SevInfo);
@@ -116,11 +122,9 @@ public:
 
 	virtual ~ApiCorrectnessWorkload(){ }
 
-	std::string description() {
-		return "ApiCorrectness";
-	}
+	std::string description() const override { return "ApiCorrectness"; }
 
-	void getMetrics(vector<PerfMetric>& m) {
+	void getMetrics(vector<PerfMetric>& m) override {
 		m.push_back(PerfMetric("Number of Random Operations Performed", numRandomOperations.getValue(), false));
 	}
 
@@ -146,9 +150,9 @@ public:
 		wait(timeout(self->runScriptedTest(self, data), 600, Void()));
 
 		if(!self->hasFailed()) {
-			//Return database to original state (for a maximum of 1800 seconds)
+			// Return database to original state (for a maximum of resetDBTimeout seconds)
 			try {
-				wait(timeoutError(::success(self->runSet(data, self)), 1800));
+				wait(timeoutError(::success(self->runSet(data, self)), self->resetDBTimeout));
 			}
 			catch(Error &e) {
 				if(e.code() == error_code_timed_out) {
@@ -321,7 +325,7 @@ public:
 
 					wait(transaction->commit());
 					for(int i = currentIndex; i < std::min(currentIndex + self->maxKeysPerTransaction, data.size()); i++)
-						debugMutation("ApiCorrectnessSet", transaction->getCommittedVersion(), MutationRef(MutationRef::DebugKey, data[i].key, data[i].value));
+						DEBUG_MUTATION("ApiCorrectnessSet", transaction->getCommittedVersion(), MutationRef(MutationRef::DebugKey, data[i].key, data[i].value));
 
 					currentIndex += self->maxKeysPerTransaction;
 					break;
@@ -651,7 +655,7 @@ public:
 
 					wait(transaction->commit());
 					for(int i = currentIndex; i < std::min(currentIndex + self->maxKeysPerTransaction, keys.size()); i++)
-						debugMutation("ApiCorrectnessClear", transaction->getCommittedVersion(), MutationRef(MutationRef::DebugKey, keys[i], StringRef()));
+						DEBUG_MUTATION("ApiCorrectnessClear", transaction->getCommittedVersion(), MutationRef(MutationRef::DebugKey, keys[i], StringRef()));
 
 					currentIndex += self->maxKeysPerTransaction;
 					break;
@@ -702,7 +706,7 @@ public:
 				}
 				transaction->clear(range);
 				wait(transaction->commit());
-				debugKeyRange("ApiCorrectnessClear", transaction->getCommittedVersion(), range);
+				DEBUG_KEY_RANGE("ApiCorrectnessClear", transaction->getCommittedVersion(), range);
 				break;
 			}
 			catch(Error &e) {

@@ -115,6 +115,7 @@ struct FuzzApiCorrectnessWorkload : TestWorkload {
 	unsigned int operationId;
 	int64_t maximumTotalData;
 	bool specialKeysRelaxed;
+	bool specialKeysWritesEnabled;
 
 	bool success;
 
@@ -131,6 +132,8 @@ struct FuzzApiCorrectnessWorkload : TestWorkload {
 		useSystemKeys = deterministicRandom()->coinflip();
 		initialKeyDensity = deterministicRandom()->random01(); // This fraction of keys are present before the first transaction (and after an unknown result)
 		specialKeysRelaxed = deterministicRandom()->coinflip();
+		// Only enable special keys writes when allowed to access system keys
+		specialKeysWritesEnabled = useSystemKeys && deterministicRandom()->coinflip();
 
 		// See https://github.com/apple/foundationdb/issues/2424
 		if (BUGGIFY) {
@@ -162,31 +165,28 @@ struct FuzzApiCorrectnessWorkload : TestWorkload {
 		    .detail("ValueSizeRange", valueSizeRange.second)
 		    .detail("MaxClearSize", maxClearSize)
 		    .detail("UseSystemKeys", useSystemKeys)
-		    .detail("SpecialKeysRelaxed", specialKeysRelaxed);
+		    .detail("SpecialKeysRelaxed", specialKeysRelaxed)
+		    .detail("SpecialKeysWritesEnabled", specialKeysWritesEnabled);
 
 		TraceEvent("RemapEventSeverity").detail("TargetEvent", "LargePacketSent").detail("OriginalSeverity", SevWarnAlways).detail("NewSeverity", SevInfo);
 		TraceEvent("RemapEventSeverity").detail("TargetEvent", "LargePacketReceived").detail("OriginalSeverity", SevWarnAlways).detail("NewSeverity", SevInfo);
 		TraceEvent("RemapEventSeverity").detail("TargetEvent", "LargeTransaction").detail("OriginalSeverity", SevWarnAlways).detail("NewSeverity", SevInfo);
 	}
 
-	virtual std::string description() { return "FuzzApiCorrectness"; }
+	std::string description() const override { return "FuzzApiCorrectness"; }
 
-	virtual Future<Void> start( Database const& cx ) {
+	Future<Void> start(Database const& cx) override {
 		if( clientId == 0 ) {
 			return loadAndRun( cx, this );
 		}
 		return Void();
 	}
 
-	virtual Future<bool> check( Database const& cx ) {
-		return success;
-	}
+	Future<bool> check(Database const& cx) override { return success; }
 
-	Key getRandomKey() {
-		return getKeyForIndex( deterministicRandom()->randomInt(0, nodes ) );
-	}
+	Key getRandomKey() const { return getKeyForIndex(deterministicRandom()->randomInt(0, nodes)); }
 
-	Key getKeyForIndex( int idx ) {
+	Key getKeyForIndex(int idx) const {
 		idx += minNode;
 		if( adjacentKeys ) {
 			return Key( keyPrefix + std::string( idx, '\x00' ) );
@@ -195,11 +195,11 @@ struct FuzzApiCorrectnessWorkload : TestWorkload {
 		}
 	}
 
-	Value getRandomValue() {
+	Value getRandomValue() const {
 		return Value( std::string( deterministicRandom()->randomInt(valueSizeRange.first,valueSizeRange.second+1), 'x' ) );
 	}
 
-	virtual void getMetrics( vector<PerfMetric>& m ) {
+	void getMetrics(vector<PerfMetric>& m) override {
 		//m.push_back( transactions.getMetric() );
 		//m.push_back( retries.getMetric() );
 	}
@@ -225,6 +225,8 @@ struct FuzzApiCorrectnessWorkload : TestWorkload {
 						if( self->useSystemKeys )
 							tr->setOption( FDBTransactionOptions::ACCESS_SYSTEM_KEYS );
 						if (self->specialKeysRelaxed) tr->setOption(FDBTransactionOptions::SPECIAL_KEY_SPACE_RELAXED);
+						if (self->specialKeysWritesEnabled)
+							tr->setOption(FDBTransactionOptions::SPECIAL_KEY_SPACE_ENABLE_WRITES);
 
 						int end = std::min(self->nodes, i+keysPerBatch );
 						tr->clear( KeyRangeRef( self->getKeyForIndex(i), self->getKeyForIndex(end) ) );
@@ -284,6 +286,9 @@ struct FuzzApiCorrectnessWorkload : TestWorkload {
 			}
 			if (self->specialKeysRelaxed) {
 				tr->setOption(FDBTransactionOptions::SPECIAL_KEY_SPACE_RELAXED);
+			}
+			if (self->specialKeysWritesEnabled) {
+				tr->setOption(FDBTransactionOptions::SPECIAL_KEY_SPACE_ENABLE_WRITES);
 			}
 			tr->addWriteConflictRange( self->conflictRange );
 
@@ -418,7 +423,11 @@ struct FuzzApiCorrectnessWorkload : TestWorkload {
 			for (size_t j = 0; j < key_size; ++j)
 				skey.append(1, (char) deterministicRandom()->randomInt(0, 256));
 
-			return Key(skey);
+			// 15% (= 20% * 75%) of the time generating keys after \xff\xff to test special keys code
+			if (deterministicRandom()->random01() < 0.2)
+				return Key(skey).withPrefix(specialKeys.begin);
+			else
+				return Key(skey);
 		}
 
 		static Value makeValue() {
@@ -667,7 +676,8 @@ struct FuzzApiCorrectnessWorkload : TestWorkload {
 					limit = deterministicRandom()->randomInt(0, INT_MAX)+1;
 			}
 
-			bool isSpecialKeyRange = specialKeys.contains(keysel1.getKey()) && keysel2.getKey() <= specialKeys.end;
+			bool isSpecialKeyRange = specialKeys.contains(keysel1.getKey()) && specialKeys.begin <= keysel2.getKey() &&
+			                         keysel2.getKey() <= specialKeys.end;
 
 			contract = {
 				std::make_pair(error_code_range_limits_invalid, ExceptionContract::possibleButRequiredIf(limit < 0)),
@@ -705,7 +715,8 @@ struct FuzzApiCorrectnessWorkload : TestWorkload {
 			keysel2 = makeKeySel();
 			limits = makeRangeLimits();
 
-			bool isSpecialKeyRange = specialKeys.contains(keysel1.getKey()) && keysel2.getKey() <= specialKeys.end;
+			bool isSpecialKeyRange = specialKeys.contains(keysel1.getKey()) && specialKeys.begin <= keysel2.getKey() &&
+			                         keysel2.getKey() <= specialKeys.end;
 
 			contract = {
 				std::make_pair(error_code_range_limits_invalid,
@@ -755,7 +766,7 @@ struct FuzzApiCorrectnessWorkload : TestWorkload {
 					limit = deterministicRandom()->randomInt(0, INT_MAX)+1;
 			}
 
-			bool isSpecialKeyRange = specialKeys.contains(key1) && key2 <= specialKeys.end;
+			bool isSpecialKeyRange = specialKeys.contains(key1) && specialKeys.begin <= key2 && key2 <= specialKeys.end;
 
 			contract = {
 				std::make_pair(error_code_inverted_range, ExceptionContract::requiredIf(key1 > key2)),
@@ -795,7 +806,7 @@ struct FuzzApiCorrectnessWorkload : TestWorkload {
 			key2 = makeKey();
 			limits = makeRangeLimits();
 
-			bool isSpecialKeyRange = specialKeys.contains(key1) && key2 <= specialKeys.end;
+			bool isSpecialKeyRange = specialKeys.contains(key1) && specialKeys.begin <= key2 && key2 <= specialKeys.end;
 
 			contract = {
 				std::make_pair(error_code_inverted_range, ExceptionContract::requiredIf(key1 > key2)),
@@ -953,12 +964,23 @@ struct FuzzApiCorrectnessWorkload : TestWorkload {
 				key = makeKey();
 			}
 			value = makeValue();
-			contract = {
-				std::make_pair( error_code_key_too_large, ExceptionContract::requiredIf(key.size() > (key.startsWith(systemKeys.begin) ? CLIENT_KNOBS->SYSTEM_KEY_SIZE_LIMIT : CLIENT_KNOBS->KEY_SIZE_LIMIT)) ),
-				std::make_pair( error_code_value_too_large, ExceptionContract::requiredIf(value.size() > CLIENT_KNOBS->VALUE_SIZE_LIMIT) ),
-				std::make_pair( error_code_key_outside_legal_range, ExceptionContract::requiredIf(
-							(key >= (workload->useSystemKeys ? systemKeys.end : normalKeys.end))) )
-			};
+			contract = { std::make_pair(
+				             error_code_key_too_large,
+				             ExceptionContract::requiredIf(key.size() > (key.startsWith(systemKeys.begin)
+				                                                             ? CLIENT_KNOBS->SYSTEM_KEY_SIZE_LIMIT
+				                                                             : CLIENT_KNOBS->KEY_SIZE_LIMIT))),
+				         std::make_pair(error_code_value_too_large,
+				                        ExceptionContract::requiredIf(value.size() > CLIENT_KNOBS->VALUE_SIZE_LIMIT)),
+				         std::make_pair(error_code_key_outside_legal_range,
+				                        ExceptionContract::requiredIf(
+				                            (key >= (workload->useSystemKeys ? systemKeys.end : normalKeys.end)) &&
+				                            !specialKeys.contains(key))),
+				         std::make_pair(error_code_special_keys_write_disabled,
+				                        ExceptionContract::requiredIf(specialKeys.contains(key) &&
+				                                                      !workload->specialKeysWritesEnabled)),
+				         std::make_pair(error_code_special_keys_no_write_module_found,
+				                        ExceptionContract::possibleIf(specialKeys.contains(key) &&
+				                                                      workload->specialKeysWritesEnabled)) };
 		}
 
 		void callback(Reference<ITransaction> tr) {
@@ -982,11 +1004,22 @@ struct FuzzApiCorrectnessWorkload : TestWorkload {
 				key1 = makeKey();
 				key2 = makeKey();
 			}
+
+			bool isSpecialKeyRange = specialKeys.contains(key1) && key2 <= specialKeys.end;
+
 			contract = {
-				std::make_pair( error_code_inverted_range, ExceptionContract::requiredIf(key1 > key2) ),
-				std::make_pair( error_code_key_outside_legal_range, ExceptionContract::requiredIf(
-							(key1 > (workload->useSystemKeys ? systemKeys.end : normalKeys.end)) ||
-							(key2 > (workload->useSystemKeys ? systemKeys.end : normalKeys.end))) )
+				std::make_pair(error_code_inverted_range, ExceptionContract::requiredIf(key1 > key2)),
+				std::make_pair(error_code_key_outside_legal_range,
+				               ExceptionContract::requiredIf(
+				                   ((key1 > (workload->useSystemKeys ? systemKeys.end : normalKeys.end)) ||
+				                    (key2 > (workload->useSystemKeys ? systemKeys.end : normalKeys.end))) &&
+				                   !isSpecialKeyRange)),
+				std::make_pair(error_code_special_keys_write_disabled,
+				               ExceptionContract::requiredIf(isSpecialKeyRange && !workload->specialKeysWritesEnabled)),
+				std::make_pair(error_code_special_keys_cross_module_clear,
+				               ExceptionContract::possibleIf(isSpecialKeyRange && workload->specialKeysWritesEnabled)),
+				std::make_pair(error_code_special_keys_no_write_module_found,
+				               ExceptionContract::possibleIf(isSpecialKeyRange && workload->specialKeysWritesEnabled))
 			};
 		}
 
@@ -1011,11 +1044,22 @@ struct FuzzApiCorrectnessWorkload : TestWorkload {
 				key1 = makeKey();
 				key2 = makeKey();
 			}
+
+			bool isSpecialKeyRange = specialKeys.contains(key1) && key2 <= specialKeys.end;
+
 			contract = {
-				std::make_pair( error_code_inverted_range, ExceptionContract::requiredIf(key1 > key2) ),
-				std::make_pair( error_code_key_outside_legal_range, ExceptionContract::requiredIf(
-							(key1 > (workload->useSystemKeys ? systemKeys.end : normalKeys.end)) ||
-							(key2 > (workload->useSystemKeys ? systemKeys.end : normalKeys.end))) )
+				std::make_pair(error_code_inverted_range, ExceptionContract::requiredIf(key1 > key2)),
+				std::make_pair(error_code_key_outside_legal_range,
+				               ExceptionContract::requiredIf(
+				                   ((key1 > (workload->useSystemKeys ? systemKeys.end : normalKeys.end)) ||
+				                    (key2 > (workload->useSystemKeys ? systemKeys.end : normalKeys.end))) &&
+				                   !isSpecialKeyRange)),
+				std::make_pair(error_code_special_keys_write_disabled,
+				               ExceptionContract::requiredIf(isSpecialKeyRange && !workload->specialKeysWritesEnabled)),
+				std::make_pair(error_code_special_keys_cross_module_clear,
+				               ExceptionContract::possibleIf(isSpecialKeyRange && workload->specialKeysWritesEnabled)),
+				std::make_pair(error_code_special_keys_no_write_module_found,
+				               ExceptionContract::possibleIf(isSpecialKeyRange && workload->specialKeysWritesEnabled))
 			};
 		}
 
@@ -1038,10 +1082,15 @@ struct FuzzApiCorrectnessWorkload : TestWorkload {
 			while (isProtectedKey(key)) {
 				key = makeKey();
 			}
-			contract = {
-				std::make_pair( error_code_key_outside_legal_range, ExceptionContract::requiredIf(
-							key >= (workload->useSystemKeys ? systemKeys.end : normalKeys.end) ) )
-			};
+			contract = { std::make_pair(error_code_key_outside_legal_range,
+				                        ExceptionContract::requiredIf(
+				                            key >= (workload->useSystemKeys ? systemKeys.end : normalKeys.end))),
+				         std::make_pair(error_code_special_keys_write_disabled,
+				                        ExceptionContract::requiredIf(specialKeys.contains(key) &&
+				                                                      !workload->specialKeysWritesEnabled)),
+				         std::make_pair(error_code_special_keys_no_write_module_found,
+				                        ExceptionContract::possibleIf(specialKeys.contains(key) &&
+				                                                      workload->specialKeysWritesEnabled)) };
 		}
 
 		void callback(Reference<ITransaction> tr) {
@@ -1134,8 +1183,14 @@ struct FuzzApiCorrectnessWorkload : TestWorkload {
 				}
 				op = deterministicRandom()->randomInt(minval, maxval+1);
 			}
-			if(op == FDBTransactionOptions::ACCESS_SYSTEM_KEYS || op == FDBTransactionOptions::READ_SYSTEM_KEYS) //do not test access system keys since the option is actually used by the workload
+
+			//do not test the following options since they are actually used by the workload
+			if(op == FDBTransactionOptions::ACCESS_SYSTEM_KEYS ||
+			   op == FDBTransactionOptions::READ_SYSTEM_KEYS ||
+			   op == FDBTransactionOptions::SPECIAL_KEY_SPACE_ENABLE_WRITES)
+			{
 				op = -1;
+			}
 
 			double orv = deterministicRandom()->random01();
 			if (orv >= 0.25) {

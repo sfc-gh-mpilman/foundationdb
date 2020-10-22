@@ -48,7 +48,7 @@ public interface ReadTransaction extends ReadTransactionContext {
 	 *  whether read conflict ranges are omitted for any reads done through this {@code ReadTransaction}.
 	 * <br>
 	 * For more information about how to use snapshot reads correctly, see
-	 * <a href="/foundationdb/developer-guide.html#using-snapshot-reads" target="_blank">Using snapshot reads</a>.
+	 * <a href="/foundationdb/developer-guide.html#snapshot-reads" target="_blank">Using snapshot reads</a>.
 	 *
 	 * @return whether this is a snapshot view of the database with relaxed isolation properties
 	 * @see #snapshot()
@@ -58,11 +58,11 @@ public interface ReadTransaction extends ReadTransactionContext {
 	/**
 	 * Return a special-purpose, read-only view of the database. Reads done through this interface are known as "snapshot reads".
 	 *  Snapshot reads selectively relax FoundationDB's isolation property, reducing
-	 *  <a href="/foundationdb/developer-guide.html#transaction-conflicts" target="_blank">Transaction conflicts</a>
+	 *  <a href="/foundationdb/developer-guide.html#conflict-ranges" target="_blank">Transaction conflicts</a>
 	 *  but making reasoning about concurrency harder.<br>
 	 * <br>
 	 * For more information about how to use snapshot reads correctly, see
-	 * <a href="/foundationdb/developer-guide.html#using-snapshot-reads" target="_blank">Using snapshot reads</a>.
+	 * <a href="/foundationdb/developer-guide.html#snapshot-reads" target="_blank">Using snapshot reads</a>.
 	 *
 	 * @return a read-only view of this {@code ReadTransaction} with relaxed isolation properties
 	 */
@@ -455,6 +455,28 @@ public interface ReadTransaction extends ReadTransactionContext {
 	 */
 	CompletableFuture<Long> getEstimatedRangeSizeBytes(Range range);
 
+	/**
+	 * Gets a list of keys that can split the given range into (roughly) equally sized chunks based on <code>chunkSize</code>.
+	 * Note: the returned split points contain the start key and end key of the given range.
+	 *
+	 * @param begin the beginning of the range (inclusive)
+	 * @param end the end of the range (exclusive)
+	 *
+	 * @return a handle to access the results of the asynchronous call
+	 */
+	CompletableFuture<KeyArrayResult> getRangeSplitPoints(byte[] begin, byte[] end, long chunkSize);
+
+	/**
+	 * Gets a list of keys that can split the given range into (roughly) equally sized chunks based on <code>chunkSize</code>
+	 * Note: the returned split points contain the start key and end key of the given range.
+	 *
+	 * @param range the range of the keys
+	 *
+	 * @return a handle to access the results of the asynchronous call
+	 */
+	CompletableFuture<KeyArrayResult> getRangeSplitPoints(Range range, long chunkSize);
+
+	
 	/**
 	 * Returns a set of options that can be set on a {@code Transaction}
 	 *

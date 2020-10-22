@@ -26,6 +26,7 @@
 #include <string>
 #include <vector>
 
+#include "flow/Arena.h"
 #include "flow/flow.h"
 #include "fdbclient/Knobs.h"
 
@@ -35,6 +36,7 @@ typedef uint64_t Sequence;
 typedef StringRef KeyRef;
 typedef StringRef ValueRef;
 typedef int64_t Generation;
+typedef UID SpanID;
 
 enum {
 	tagLocalitySpecial = -1,
@@ -77,6 +79,10 @@ struct Tag {
 		serializer(ar, locality, id);
 	}
 };
+
+template <>
+struct flow_ref<Tag> : std::integral_constant<bool, false> {};
+
 #pragma pack(pop)
 
 template <class Ar> void load( Ar& ar, Tag& tag ) { tag.serialize_unversioned(ar); }
@@ -105,6 +111,13 @@ struct struct_like_traits<Tag> : std::true_type {
 			static_assert(i == 1);
 			m.locality = t;
 		}
+	}
+};
+
+template<>
+struct Traceable<Tag> : std::true_type {
+	static std::string toString(const Tag& value) {
+		return value.toString();
 	}
 };
 
@@ -222,14 +235,29 @@ std::string describe( std::vector<T> const& items, int max_items = -1 ) {
 	return describeList(items, max_items);
 }
 
+template<typename T>
+struct Traceable<std::vector<T>> : std::true_type {
+	static std::string toString(const std::vector<T>& value) {
+		return describe(value);
+	}
+};
+
 template <class T>
 std::string describe( std::set<T> const& items, int max_items = -1 ) {
 	return describeList(items, max_items);
 }
 
+template<typename T>
+struct Traceable<std::set<T>> : std::true_type {
+	static std::string toString(const std::set<T>& value) {
+		return describe(value);
+	}
+};
+
 std::string printable( const StringRef& val );
 std::string printable( const std::string& val );
 std::string printable( const KeyRangeRef& range );
+std::string printable( const VectorRef<KeyRangeRef>& val);
 std::string printable( const VectorRef<StringRef>& val );
 std::string printable( const VectorRef<KeyValueRef>& val );
 std::string printable( const KeyValueRef& val );
@@ -252,6 +280,7 @@ struct KeyRangeRef {
 	KeyRangeRef() {}
 	KeyRangeRef( const KeyRef& begin, const KeyRef& end ) : begin(begin), end(end) {
 		if( begin > end ) {
+			TraceEvent("InvertedRange").detail("Begin", begin).detail("End", end);
 			throw inverted_range();
 		}
 	}
@@ -261,6 +290,14 @@ struct KeyRangeRef {
 	bool contains( const KeyRef& key ) const { return begin <= key && key < end; }
 	bool contains( const KeyRangeRef& keys ) const { return begin <= keys.begin && keys.end <= end; }
 	bool intersects( const KeyRangeRef& keys ) const { return begin < keys.end && keys.begin < end; }
+	bool intersects(const VectorRef<KeyRangeRef>& keysVec) const {
+		for (const auto& keys : keysVec) {
+			if (intersects(keys)) {
+				return true;
+			}
+		}
+		return false;
+	}
 	bool empty() const { return begin == end; }
 	bool singleKeyRange() const { return equalsKeyAfter(begin, end); }
 
@@ -622,9 +659,10 @@ struct GetRangeLimits {
 	bool hasRowLimit();
 
 	bool hasSatisfiedMinRows();
-	bool isValid() { return (rows >= 0 || rows == ROW_LIMIT_UNLIMITED)
-							&& (bytes >= 0 || bytes == BYTE_LIMIT_UNLIMITED)
-							&& minRows >= 0 && (minRows <= rows || rows == ROW_LIMIT_UNLIMITED); }
+	bool isValid() const {
+		return (rows >= 0 || rows == ROW_LIMIT_UNLIMITED) && (bytes >= 0 || bytes == BYTE_LIMIT_UNLIMITED) &&
+		       minRows >= 0 && (minRows <= rows || rows == ROW_LIMIT_UNLIMITED);
+	}
 };
 
 struct RangeResultRef : VectorRef<KeyValueRef> {
@@ -716,15 +754,17 @@ struct TLogVersion {
 		// V3 was the introduction of spill by reference;
 		// V4 changed how data gets written to satellite TLogs so that we can peek from them;
 		// V5 merged reference and value spilling
+		// V6 added span context to list of serialized mutations sent from proxy to tlogs
 		// V1 = 1,  // 4.6 is dispatched to via 6.0
 		V2 = 2, // 6.0
 		V3 = 3, // 6.1
 		V4 = 4, // 6.2
-		V5 = 5, // 7.0
+		V5 = 5, // 6.3
+		V6 = 6, // 7.0
 		MIN_SUPPORTED = V2,
-		MAX_SUPPORTED = V5,
-		MIN_RECRUITABLE = V3,
-		DEFAULT = V4,
+		MAX_SUPPORTED = V6,
+		MIN_RECRUITABLE = V5,
+		DEFAULT = V5,
 	} version;
 
 	TLogVersion() : version(UNSET) {}
@@ -746,6 +786,7 @@ struct TLogVersion {
 		if (s == LiteralStringRef("3")) return V3;
 		if (s == LiteralStringRef("4")) return V4;
 		if (s == LiteralStringRef("5")) return V5;
+		if (s == LiteralStringRef("6")) return V6;
 		return default_error_or();
 	}
 };
@@ -829,6 +870,9 @@ struct LogMessageVersion {
 		if (r.version<version) return false;
 		return sub < r.sub;
 	}
+	bool operator>(LogMessageVersion const& r) const { return r < *this; }
+	bool operator<=(LogMessageVersion const& r) const { return !(*this > r); }
+	bool operator>=(LogMessageVersion const& r) const { return !(*this < r); }
 
 	bool operator==(LogMessageVersion const& r) const { return version == r.version && sub == r.sub; }
 
@@ -915,6 +959,7 @@ struct ClusterControllerPriorityInfo {
 	uint8_t dcFitness;
 
 	bool operator== (ClusterControllerPriorityInfo const& r) const { return processClassFitness == r.processClassFitness && isExcluded == r.isExcluded && dcFitness == r.dcFitness; }
+	bool operator!=(ClusterControllerPriorityInfo const& r) const { return !(*this == r); }
 	ClusterControllerPriorityInfo()
 	  : ClusterControllerPriorityInfo(/*ProcessClass::UnsetFit*/ 2, false,
 	                                  ClusterControllerPriorityInfo::FitnessUnknown) {}

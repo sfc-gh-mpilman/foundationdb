@@ -1392,7 +1392,7 @@ public:
 
 	// Returns the usable size of pages returned by the pager (i.e. the size of the page that isn't pager overhead).
 	// For a given pager instance, separate calls to this function must return the same value.
-	int getUsablePageSize() override { return logicalPageSize - sizeof(FastAllocatedPage::Checksum); }
+	int getUsablePageSize() const override { return logicalPageSize - sizeof(FastAllocatedPage::Checksum); }
 
 	// Get a new, previously available page ID.  The page will be considered in-use after the next commit
 	// regardless of whether or not it was written to, until it is returned to the pager via freePage()
@@ -1472,10 +1472,11 @@ public:
 
 		// If the page is still being read then it's not also being written because a write places
 		// the new content into readFuture when the write is launched, not when it is completed.
-		// Read/write ordering is being enforced waiting readers will not see the new write.  This
+		// Read/write ordering is being enforced so waiting readers will not see the new write.  This
 		// is necessary for remap erasure to work correctly since the oldest version of a page, located
-		// at the original page ID, could have a pending read when that version is expired and the write
-		// of the next newest version over top of the original page begins.
+		// at the original page ID, could have a pending read when that version is expired (after which 
+		// future reads of the version are not allowed) and the write of the next newest version over top
+		// of the original page begins.
 		if (!cacheEntry.initialized()) {
 			cacheEntry.writeFuture = writePhysicalPage(pageID, data);
 		} else if (cacheEntry.reading()) {
@@ -1690,7 +1691,7 @@ public:
 
 	// Get the oldest *readable* version, which is not the same as the oldest retained version as the version
 	// returned could have been set as the oldest version in the pending commit
-	Version getOldestVersion() override { return pHeader->oldestVersion; };
+	Version getOldestVersion() const override { return pHeader->oldestVersion; };
 
 	// Calculate the *effective* oldest version, which can be older than the one set in the last commit since we
 	// are allowing active snapshots to temporarily delay page reuse.
@@ -1718,7 +1719,7 @@ public:
 				secondType = RemappedPage::NONE;
 			} else {
 				secondType = RemappedPage::getTypeOf(nextEntry->second);
-				secondAfterOldestRetainedVersion = nextEntry->first >= oldestRetainedVersion;
+				secondAfterOldestRetainedVersion = nextEntry->first > oldestRetainedVersion;
 			}
 		} else {
 			ASSERT(iVersionPagePair->second == invalidLogicalPageID);
@@ -1767,6 +1768,10 @@ public:
 			self->filename.c_str(), p.toString().c_str(), secondType, ::toString(*iVersionPagePair).c_str(), oldestRetainedVersion);
 
 		if(copyNewToOriginal) {
+			if(g_network->isSimulated()) {
+				ASSERT(self->remapDestinationsSimOnly.count(p.originalPageID) == 0);
+				self->remapDestinationsSimOnly.insert(p.originalPageID);
+			}
 			debug_printf("DWALPager(%s) remapCleanup copy %s\n", self->filename.c_str(), p.toString().c_str());
 
 			// Read the data from the page that the original was mapped to
@@ -1829,7 +1834,8 @@ public:
 		state RemappedPage cutoff(oldestRetainedVersion - self->remapCleanupWindow);
 
 		// Minimum version we must pop to before obeying stop command.
-		state Version minStopVersion = cutoff.version - (self->remapCleanupWindow * SERVER_KNOBS->REDWOOD_REMAP_CLEANUP_LAG);
+		state Version minStopVersion = cutoff.version - (BUGGIFY ? deterministicRandom()->randomInt(0, 10) : (self->remapCleanupWindow * SERVER_KNOBS->REDWOOD_REMAP_CLEANUP_LAG));
+		self->remapDestinationsSimOnly.clear();
 
 		loop {
 			state Optional<RemappedPage> p = wait(self->remapQueue.pop(cutoff));
@@ -1995,7 +2001,7 @@ public:
 
 	Future<Void> onClosed() override { return closedPromise.getFuture(); }
 
-	StorageBytes getStorageBytes() override {
+	StorageBytes getStorageBytes() const override {
 		ASSERT(recoverFuture.isReady());
 		int64_t free;
 		int64_t total;
@@ -2043,7 +2049,7 @@ public:
 
 	Future<Void> init() override { return recoverFuture; }
 
-	Version getLatestVersion() override { return pLastCommittedHeader->committedVersion; }
+	Version getLatestVersion() const override { return pLastCommittedHeader->committedVersion; }
 
 private:
 	~DWALPager() {}
@@ -2142,6 +2148,7 @@ private:
 
 	RemapQueueT remapQueue;
 	Version remapCleanupWindow;
+	std::unordered_set<PhysicalPageID> remapDestinationsSimOnly;
 
 	struct SnapshotEntry {
 		Version version;
@@ -2266,6 +2273,7 @@ struct SplitStringRef {
 		const uint8_t* next;
 
 		inline bool operator==(const const_iterator& rhs) const { return ptr == rhs.ptr; }
+		inline bool operator!=(const const_iterator& rhs) const { return !(*this == rhs); }
 
 		inline const_iterator& operator++() {
 			++ptr;
@@ -2946,8 +2954,7 @@ struct BoundaryRefAndPage {
 	}
 };
 
-#define NOT_IMPLEMENTED                                                                                                \
-	{ UNSTOPPABLE_ASSERT(false); }
+#define NOT_IMPLEMENTED UNSTOPPABLE_ASSERT(false)
 
 #pragma pack(push, 1)
 template <typename T, typename SizeT = int8_t>
@@ -2974,7 +2981,7 @@ struct InPlaceArray {
 };
 #pragma pack(pop)
 
-class VersionedBTree : public IVersionedStore {
+class VersionedBTree final : public IVersionedStore {
 public:
 	// The first possible internal record possible in the tree
 	static RedwoodRecordRef dbBegin;
@@ -3084,23 +3091,22 @@ public:
 
 	void close() { return close_impl(false); }
 
-	KeyValueStoreType getType() NOT_IMPLEMENTED bool supportsMutation(int op) NOT_IMPLEMENTED StorageBytes
-	    getStorageBytes() {
-		return m_pager->getStorageBytes();
-	}
+	KeyValueStoreType getType() const override { NOT_IMPLEMENTED; }
+	bool supportsMutation(int op) const override { NOT_IMPLEMENTED; }
+	StorageBytes getStorageBytes() const override { return m_pager->getStorageBytes(); }
 
 	// Writes are provided in an ordered stream.
 	// A write is considered part of (a change leading to) the version determined by the previous call to
 	// setWriteVersion() A write shall not become durable until the following call to commit() begins, and shall be
 	// durable once the following call to commit() returns
-	void set(KeyValueRef keyValue) {
+	void set(KeyValueRef keyValue) override {
 		++g_redwoodMetrics.opSet;
 		g_redwoodMetrics.opSetKeyBytes += keyValue.key.size();
 		g_redwoodMetrics.opSetValueBytes += keyValue.value.size();
 		m_pBuffer->insert(keyValue.key).mutation().setBoundaryValue(m_pBuffer->copyToArena(keyValue.value));
 	}
 
-	void clear(KeyRangeRef clearedRange) {
+	void clear(KeyRangeRef clearedRange) override {
 		// Optimization for single key clears to create just one mutation boundary instead of two
 		if (clearedRange.begin.size() == clearedRange.end.size() - 1 &&
 		    clearedRange.end[clearedRange.end.size() - 1] == 0 && clearedRange.end.startsWith(clearedRange.begin)) {
@@ -3119,22 +3125,20 @@ public:
 		m_pBuffer->erase(iBegin, iEnd);
 	}
 
-	void mutate(int op, StringRef param1, StringRef param2) NOT_IMPLEMENTED
+	void mutate(int op, StringRef param1, StringRef param2) override { NOT_IMPLEMENTED; }
 
-	    void setOldestVersion(Version v) {
-		m_newOldestVersion = v;
-	}
+	void setOldestVersion(Version v) override { m_newOldestVersion = v; }
 
-	Version getOldestVersion() { return m_pager->getOldestVersion(); }
+	Version getOldestVersion() const override { return m_pager->getOldestVersion(); }
 
-	Version getLatestVersion() {
+	Version getLatestVersion() const override {
 		if (m_writeVersion != invalidVersion) return m_writeVersion;
 		return m_pager->getLatestVersion();
 	}
 
-	Version getWriteVersion() { return m_writeVersion; }
+	Version getWriteVersion() const { return m_writeVersion; }
 
-	Version getLastCommittedVersion() { return m_lastCommittedVersion; }
+	Version getLastCommittedVersion() const { return m_lastCommittedVersion; }
 
 	VersionedBTree(IPager2* pager, std::string name)
 	  : m_pager(pager), m_writeVersion(invalidVersion), m_lastCommittedVersion(invalidVersion), m_pBuffer(nullptr),
@@ -3315,7 +3319,7 @@ public:
 		m_writeVersion = v;
 	}
 
-	Future<Void> commit() {
+	Future<Void> commit() override {
 		if (m_pBuffer == nullptr) return m_latestCommit;
 		return commit_impl(this);
 	}
@@ -3866,19 +3870,19 @@ private:
 
 		virtual ~SuperPage() { delete[] m_data; }
 
-		virtual Reference<IPage> clone() const {
+		Reference<IPage> clone() const override {
 			return Reference<IPage>(new SuperPage({ Reference<const IPage>::addRef(this) }));
 		}
 
-		void addref() const { ReferenceCounted<SuperPage>::addref(); }
+		void addref() const override { ReferenceCounted<SuperPage>::addref(); }
 
-		void delref() const { ReferenceCounted<SuperPage>::delref(); }
+		void delref() const override { ReferenceCounted<SuperPage>::delref(); }
 
-		int size() const { return m_size; }
+		int size() const override { return m_size; }
 
-		uint8_t const* begin() const { return m_data; }
+		uint8_t const* begin() const override { return m_data; }
 
-		uint8_t* mutate() { return m_data; }
+		uint8_t* mutate() override { return m_data; }
 
 	private:
 		uint8_t* m_data;
@@ -5686,12 +5690,13 @@ public:
 	  : m_filePrefix(filePrefix), m_concurrentReads(new FlowLock(SERVER_KNOBS->REDWOOD_KVSTORE_CONCURRENT_READS)) {
 		// TODO: This constructor should really just take an IVersionedStore
 
+		int pageSize = BUGGIFY ? deterministicRandom()->randomInt(1000, 4096*4) : SERVER_KNOBS->REDWOOD_DEFAULT_PAGE_SIZE;
 		int64_t pageCacheBytes = g_network->isSimulated()
-			                     ? (BUGGIFY ? FLOW_KNOBS->BUGGIFY_SIM_PAGE_CACHE_4K : FLOW_KNOBS->SIM_PAGE_CACHE_4K)
+			                     ? (BUGGIFY ? deterministicRandom()->randomInt(pageSize, FLOW_KNOBS->BUGGIFY_SIM_PAGE_CACHE_4K) : FLOW_KNOBS->SIM_PAGE_CACHE_4K)
 			                     : FLOW_KNOBS->PAGE_CACHE_4K;
 		Version remapCleanupWindow = BUGGIFY ? deterministicRandom()->randomInt64(0, 1000) : SERVER_KNOBS->REDWOOD_REMAP_CLEANUP_WINDOW;
 
-		IPager2* pager = new DWALPager(SERVER_KNOBS->REDWOOD_DEFAULT_PAGE_SIZE, filePrefix, pageCacheBytes, remapCleanupWindow);
+		IPager2* pager = new DWALPager(pageSize, filePrefix, pageCacheBytes, remapCleanupWindow);
 		m_tree = new VersionedBTree(pager, filePrefix);
 		m_init = catchError(init_impl(this));
 	}
@@ -5726,22 +5731,22 @@ public:
 		delete self;
 	}
 
-	void close() { shutdown(this, false); }
+	void close() override { shutdown(this, false); }
 
-	void dispose() { shutdown(this, true); }
+	void dispose() override { shutdown(this, true); }
 
-	Future<Void> onClosed() { return m_closed.getFuture(); }
+	Future<Void> onClosed() override { return m_closed.getFuture(); }
 
-	Future<Void> commit(bool sequential = false) {
+	Future<Void> commit(bool sequential = false) override {
 		Future<Void> c = m_tree->commit();
 		m_tree->setOldestVersion(m_tree->getLatestVersion());
 		m_tree->setWriteVersion(m_tree->getWriteVersion() + 1);
 		return catchError(c);
 	}
 
-	KeyValueStoreType getType() { return KeyValueStoreType::SSD_REDWOOD_V1; }
+	KeyValueStoreType getType() const override { return KeyValueStoreType::SSD_REDWOOD_V1; }
 
-	StorageBytes getStorageBytes() { return m_tree->getStorageBytes(); }
+	StorageBytes getStorageBytes() const override { return m_tree->getStorageBytes(); }
 
 	Future<Void> getError() { return delayed(m_error.getFuture()); };
 
@@ -5750,12 +5755,13 @@ public:
 		m_tree->clear(range);
 	}
 
-	void set(KeyValueRef keyValue, const Arena* arena = NULL) {
+	void set(KeyValueRef keyValue, const Arena* arena = nullptr) override {
 		debug_printf("SET %s\n", printable(keyValue).c_str());
 		m_tree->set(keyValue);
 	}
 
-	Future<Standalone<RangeResultRef>> readRange(KeyRangeRef keys, int rowLimit = 1 << 30, int byteLimit = 1 << 30) {
+	Future<Standalone<RangeResultRef>> readRange(KeyRangeRef keys, int rowLimit = 1 << 30,
+	                                             int byteLimit = 1 << 30) override {
 		debug_printf("READRANGE %s\n", printable(keys).c_str());
 		return catchError(readRange_impl(this, keys, rowLimit, byteLimit));
 	}
@@ -6360,11 +6366,15 @@ ACTOR Future<Void> verify(VersionedBTree* btree, FutureStream<Version> vStream,
 				committedVersions.pop_front();
 			}
 
-			// Choose a random committed version, or sometimes the latest (which could be ahead of the latest version
-			// from vStream)
-			v = (committedVersions.empty() || deterministicRandom()->random01() < 0.25)
-			        ? btree->getLastCommittedVersion()
-			        : committedVersions[deterministicRandom()->randomInt(0, committedVersions.size())];
+			// Continue if the versions list is empty, which won't wait until it reaches the oldest readable
+			// btree version which will already be in vStream.
+			if(committedVersions.empty()) {
+				continue;
+			}
+
+			// Choose a random committed version.
+			v = committedVersions[deterministicRandom()->randomInt(0, committedVersions.size())];
+
 			debug_printf("Using committed version %" PRId64 "\n", v);
 			// Get a cursor at v so that v doesn't get expired between the possibly serial steps below.
 			state Reference<IStoreCursor> cur = btree->readAtVersion(v);
@@ -6500,8 +6510,12 @@ struct IntIntPair {
 	}
 
 	bool operator==(const IntIntPair& rhs) const { return compare(rhs) == 0; }
+	bool operator!=(const IntIntPair& rhs) const { return compare(rhs) != 0; }
 
 	bool operator<(const IntIntPair& rhs) const { return compare(rhs) < 0; }
+	bool operator>(const IntIntPair& rhs) const { return compare(rhs) > 0; }
+	bool operator<=(const IntIntPair& rhs) const { return compare(rhs) <= 0; }
+	bool operator>=(const IntIntPair& rhs) const { return compare(rhs) >= 0; }
 
 	int deltaSize(const IntIntPair& base, int skipLen, bool worstcase) const { return sizeof(Delta); }
 
@@ -7229,7 +7243,7 @@ TEST_CASE("!/redwood/correctness/btree") {
 	    shortTest ? 200 : (deterministicRandom()->coinflip() ? 4096 : deterministicRandom()->randomInt(200, 400));
 
 	state int64_t targetPageOps = shortTest ? 50000 : 1000000;
-	state bool pagerMemoryOnly = shortTest && (deterministicRandom()->random01() < .01);
+	state bool pagerMemoryOnly = shortTest && (deterministicRandom()->random01() < .001);
 	state int maxKeySize = deterministicRandom()->randomInt(1, pageSize * 2);
 	state int maxValueSize = randomSize(pageSize * 25);
 	state int maxCommitSize = shortTest ? 1000 : randomSize(std::min<int>((maxKeySize + maxValueSize) * 20000, 10e6));
@@ -7238,10 +7252,10 @@ TEST_CASE("!/redwood/correctness/btree") {
 	state double clearPostSetProbability = deterministicRandom()->random01() * .1;
 	state double coldStartProbability = pagerMemoryOnly ? 0 : (deterministicRandom()->random01() * 0.3);
 	state double advanceOldVersionProbability = deterministicRandom()->random01();
-	state int64_t cacheSizeBytes =
-	    pagerMemoryOnly ? 2e9 : (BUGGIFY ? deterministicRandom()->randomInt(1, 10 * pageSize) : 0);
+	state int64_t cacheSizeBytes = pagerMemoryOnly ? 2e9 : (pageSize * deterministicRandom()->randomInt(1, (BUGGIFY ? 2 : 10000) + 1));
 	state Version versionIncrement = deterministicRandom()->randomInt64(1, 1e8);
-	state Version remapCleanupWindow = deterministicRandom()->randomInt64(0, versionIncrement * 50);
+	state Version remapCleanupWindow = BUGGIFY ? 0 : deterministicRandom()->randomInt64(1, versionIncrement * 50);
+	state int maxVerificationMapEntries = 300e3;
 
 	printf("\n");
 	printf("targetPageOps: %" PRId64 "\n", targetPageOps);
@@ -7260,6 +7274,7 @@ TEST_CASE("!/redwood/correctness/btree") {
 	printf("cacheSizeBytes: %s\n", cacheSizeBytes == 0 ? "default" : format("%" PRId64, cacheSizeBytes).c_str());
 	printf("versionIncrement: %" PRId64 "\n", versionIncrement);
 	printf("remapCleanupWindow: %" PRId64 "\n", remapCleanupWindow);
+	printf("maxVerificationMapEntries: %d\n", maxVerificationMapEntries);
 	printf("\n");
 
 	printf("Deleting existing test data...\n");
@@ -7297,7 +7312,7 @@ TEST_CASE("!/redwood/correctness/btree") {
 	state Future<Void> commit = Void();
 	state int64_t totalPageOps = 0;
 
-	while (totalPageOps < targetPageOps) {
+	while (totalPageOps < targetPageOps && written.size() < maxVerificationMapEntries) {
 		// Sometimes increment the version
 		if (deterministicRandom()->random01() < 0.10) {
 			++version;
@@ -7392,8 +7407,8 @@ TEST_CASE("!/redwood/correctness/btree") {
 			keys.insert(kv.key);
 		}
 
-		// Commit at end or after this commit's mutation bytes are reached
-		if (totalPageOps >= targetPageOps || mutationBytesThisCommit >= mutationBytesTargetThisCommit) {
+		// Commit after any limits for this commit or the total test are reached
+		if (totalPageOps >= targetPageOps || written.size() >= maxVerificationMapEntries || mutationBytesThisCommit >= mutationBytesTargetThisCommit) {
 			// Wait for previous commit to finish
 			wait(commit);
 			printf("Committed.  Next commit %d bytes, %" PRId64 " bytes.", mutationBytesThisCommit, mutationBytes.get());
@@ -7414,7 +7429,9 @@ TEST_CASE("!/redwood/correctness/btree") {
 			commit = map(btree->commit(), [=,&ops=totalPageOps](Void) {
 				// Update pager ops before clearing metrics
 				ops += g_redwoodMetrics.pageOps();
-				printf("PageOps %" PRId64 "/%" PRId64 " (%.2f%%)\n", ops, targetPageOps, ops * 100.0 / targetPageOps);
+				printf("PageOps %" PRId64 "/%" PRId64 " (%.2f%%) VerificationMapEntries %d/%d (%.2f%%)\n",
+					ops, targetPageOps, ops * 100.0 / targetPageOps,
+					written.size(), maxVerificationMapEntries, written.size() * 100.0 / maxVerificationMapEntries);
 				printf("Committed:\n%s\n", g_redwoodMetrics.toString(true).c_str());
 
 				// Notify the background verifier that version is committed and therefore readable

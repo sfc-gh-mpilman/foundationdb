@@ -49,6 +49,7 @@ static const char* typeString[] = { "SetValue",
 	                                "MinV2",
 	                                "AndV2",
 	                                "CompareAndClear",
+	                                "Reserved_For_SpanContextMessage",
 	                                "MAX_ATOMIC_OP" };
 
 struct MutationRef {
@@ -75,6 +76,7 @@ struct MutationRef {
 		MinV2,
 		AndV2,
 		CompareAndClear,
+		Reserved_For_SpanContextMessage /* See fdbserver/SpanContextMessage.h */,
 		MAX_ATOMIC_OP
 	};
 	// This is stored this way for serialization purposes.
@@ -83,6 +85,7 @@ struct MutationRef {
 
 	MutationRef() {}
 	MutationRef( Type t, StringRef a, StringRef b ) : type(t), param1(a), param2(b) {}
+	MutationRef( Arena& to, Type t, StringRef a, StringRef b ) : type(t), param1(to, a), param2(to, b) {}
 	MutationRef( Arena& to, const MutationRef& from ) : type(from.type), param1( to, from.param1 ), param2( to, from.param2 ) {}
 	int totalSize() const { return OVERHEAD_BYTES + param1.size() + param2.size(); }
 	int expectedSize() const { return param1.size() + param2.size(); }
@@ -130,6 +133,13 @@ struct MutationRef {
 		                       (1 << SetVersionstampedKey) | (1 << SetVersionstampedValue) | (1 << MinV2) |
 		                       (1 << CompareAndClear)
 	};
+};
+
+template<>
+struct Traceable<MutationRef> : std::true_type {
+	static std::string toString(MutationRef const& value) {
+		return value.toString();
+	}
 };
 
 static inline std::string getTypeString(MutationRef::Type type) {
@@ -205,8 +215,5 @@ struct CommitTransactionRef {
 		return read_conflict_ranges.expectedSize() + write_conflict_ranges.expectedSize() + mutations.expectedSize();
 	}
 };
-
-bool debugMutation( const char* context, Version version, MutationRef const& m );
-bool debugKeyRange( const char* context, Version version, KeyRangeRef const& keyRange );
 
 #endif

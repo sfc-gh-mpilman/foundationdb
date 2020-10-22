@@ -63,12 +63,12 @@ std::atomic<int64_t> net2RunLoopIterations(0);
 std::atomic<int64_t> net2RunLoopSleeps(0);
 
 volatile size_t net2backtraces_max = 10000;
-volatile void** volatile net2backtraces = NULL;
+volatile void** volatile net2backtraces = nullptr;
 volatile size_t net2backtraces_offset = 0;
 volatile bool net2backtraces_overflow = false;
 volatile int net2backtraces_count = 0;
 
-volatile void **other_backtraces = NULL;
+volatile void **other_backtraces = nullptr;
 sigset_t sigprof_set;
 
 
@@ -129,12 +129,12 @@ public:
 	virtual Reference<IListener> listen( NetworkAddress localAddr );
 
 	// INetwork interface
-	virtual double now() { return currentTime; };
-	virtual double timer() { return ::timer(); };
-	virtual Future<Void> delay( double seconds, TaskPriority taskId );
-	virtual Future<class Void> yield( TaskPriority taskID );
-	virtual bool check_yield(TaskPriority taskId);
-	virtual TaskPriority getCurrentTask() { return currentTaskID; }
+	virtual double now() const override { return currentTime; };
+	virtual double timer() override { return ::timer(); };
+	virtual Future<Void> delay(double seconds, TaskPriority taskId) override;
+	virtual Future<class Void> yield(TaskPriority taskID) override;
+	virtual bool check_yield(TaskPriority taskId) override;
+	virtual TaskPriority getCurrentTask() const override { return currentTaskID; }
 	virtual void setCurrentTask(TaskPriority taskID ) { currentTaskID = taskID; priorityMetric = (int64_t)taskID; }
 	virtual void onMainThread( Promise<Void>&& signal, TaskPriority taskID );
 	bool isOnMainThread() const override {
@@ -144,7 +144,7 @@ public:
 		if ( thread_network == this )
 			stopImmediately();
 		else
-			onMainThreadVoid( [this] { this->stopImmediately(); }, NULL );
+			onMainThreadVoid( [this] { this->stopImmediately(); }, nullptr );
 	}
 	virtual void addStopCallback( std::function<void()> fn ) {
 		if ( thread_network == this )
@@ -157,16 +157,16 @@ public:
 	virtual THREAD_HANDLE startThread( THREAD_FUNC_RETURN (*func) (void*), void *arg);
 
 	virtual void getDiskBytes( std::string const& directory, int64_t& free, int64_t& total );
-	virtual bool isAddressOnThisHost( NetworkAddress const& addr );
+	virtual bool isAddressOnThisHost(NetworkAddress const& addr) const override;
 	void updateNow(){ currentTime = timer_monotonic(); }
 
-	virtual flowGlobalType global(int id) { return (globals.size() > id) ? globals[id] : NULL; }
+	virtual flowGlobalType global(int id) const override { return (globals.size() > id) ? globals[id] : nullptr; }
 	virtual void setGlobal(size_t id, flowGlobalType v) { globals.resize(std::max(globals.size(),id+1)); globals[id] = v; }
 	std::vector<flowGlobalType>		globals;
 
-	virtual const TLSConfig& getTLSConfig() { return tlsConfig; }
+	virtual const TLSConfig& getTLSConfig() const override { return tlsConfig; }
 
-	virtual bool checkRunnable();
+	virtual bool checkRunnable() override;
 
 	bool useThreadPool;
 
@@ -192,7 +192,7 @@ public:
 	TDMetricCollection tdmetrics;
 	double currentTime;
 	bool stopped;
-	std::map<IPAddress, bool> addressOnHostCache;
+	mutable std::map<IPAddress, bool> addressOnHostCache;
 
 	std::atomic<bool> started;
 
@@ -269,7 +269,7 @@ class BindPromise {
 public:
 	BindPromise( const char* errContext, UID errID ) : errContext(errContext), errID(errID) {}
 	BindPromise( BindPromise const& r ) : p(r.p), errContext(r.errContext), errID(r.errID) {}
-	BindPromise(BindPromise&& r) BOOST_NOEXCEPT : p(std::move(r.p)), errContext(r.errContext), errID(r.errID) {}
+	BindPromise(BindPromise&& r) noexcept : p(std::move(r.p)), errContext(r.errContext), errID(r.errID) {}
 
 	Future<Void> getFuture() { return p.getFuture(); }
 
@@ -322,11 +322,11 @@ struct SendBufferIterator {
 		if(limit > 0)
 			p = p->next;
 		else
-			p = NULL;
+			p = nullptr;
 	}
 
 	boost::asio::const_buffer operator*() const {
-		return boost::asio::const_buffer( p->data + p->bytes_sent, std::min(limit, p->bytes_written - p->bytes_sent) );
+		return boost::asio::const_buffer(p->data() + p->bytes_sent, std::min(limit, p->bytes_written - p->bytes_sent));
 	}
 };
 
@@ -444,9 +444,9 @@ public:
 		return sent;
 	}
 
-	virtual NetworkAddress getPeerAddress() { return peer_address; }
+	virtual NetworkAddress getPeerAddress() const override { return peer_address; }
 
-	virtual UID getDebugID() { return id; }
+	virtual UID getDebugID() const override { return id; }
 
 	tcp::socket& getSocket() { return socket; }
 private:
@@ -507,7 +507,7 @@ public:
 		return doAccept( this );
 	}
 
-	virtual NetworkAddress getListenAddress() { return listenAddress; }
+	virtual NetworkAddress getListenAddress() const override { return listenAddress; }
 
 private:
 	ACTOR static Future<Reference<IConnection>> doAccept( Listener* self ) {
@@ -537,10 +537,10 @@ struct SSLHandshakerThread : IThreadPoolReceiver {
 	SSLHandshakerThread() {}
 	virtual void init() {}
 
-	struct Handshake : TypedAction<SSLHandshakerThread,Handshake> {
+	struct Handshake final : TypedAction<SSLHandshakerThread, Handshake> {
 		Handshake(ssl_socket &socket, ssl_socket::handshake_type type) : socket(socket), type(type) {
 		}
-		virtual double getTimeEstimate() { return 0.001; }
+		double getTimeEstimate() const override { return 0.001; }
 
 		ThreadReturnPromise<Void> done;
 		ssl_socket &socket;
@@ -629,30 +629,10 @@ public:
 		init();
 	}
 
-	ACTOR static void doAcceptHandshake( Reference<SSLConnection> self, Promise<Void> connected) {
-		state std::pair<IPAddress,uint16_t> peerIP;
+	ACTOR static void doAcceptHandshake( Reference<SSLConnection> self, Promise<Void> connected ) {
 		state Hold<int> holder;
 
 		try {
-			peerIP = std::make_pair(self->getPeerAddress().ip, static_cast<uint16_t>(0));
-			auto iter(g_network->networkInfo.serverTLSConnectionThrottler.find(peerIP));
-			if(iter != g_network->networkInfo.serverTLSConnectionThrottler.end()) {
-				if (now() < iter->second.second) {
-					if(iter->second.first >= FLOW_KNOBS->TLS_SERVER_CONNECTION_THROTTLE_ATTEMPTS) {
-						TraceEvent("TLSIncomingConnectionThrottlingWarning").suppressFor(1.0).detail("PeerIP", peerIP.first.toString());
-						wait(delay(FLOW_KNOBS->CONNECTION_MONITOR_TIMEOUT));
-						self->closeSocket();
-						connected.sendError(connection_failed());
-						return;
-					}
-				} else {
-					g_network->networkInfo.serverTLSConnectionThrottler.erase(peerIP);
-				}
-			}
-
-			wait(g_network->networkInfo.handshakeLock->take());
-			state FlowLock::Releaser releaser(*g_network->networkInfo.handshakeLock);
-
 			Future<Void> onHandshook;
 
 			// If the background handshakers are not all busy, use one
@@ -672,24 +652,51 @@ public:
 			wait(delay(0, TaskPriority::Handshake));
 			connected.send(Void());
 		} catch (...) {
-			auto iter(g_network->networkInfo.serverTLSConnectionThrottler.find(peerIP));
-			if(iter != g_network->networkInfo.serverTLSConnectionThrottler.end()) {
-				iter->second.first++;
-			} else {
-				g_network->networkInfo.serverTLSConnectionThrottler[peerIP] = std::make_pair(0,now() + FLOW_KNOBS->TLS_SERVER_CONNECTION_THROTTLE_TIMEOUT);
-			}
 			self->closeSocket();
 			connected.sendError(connection_failed());
 		}
 	}
 
 	ACTOR static Future<Void> acceptHandshakeWrapper( Reference<SSLConnection> self ) {
+		state std::pair<IPAddress,uint16_t> peerIP;
+		peerIP = std::make_pair(self->getPeerAddress().ip, static_cast<uint16_t>(0));
+		auto iter(g_network->networkInfo.serverTLSConnectionThrottler.find(peerIP));
+		if(iter != g_network->networkInfo.serverTLSConnectionThrottler.end()) {
+			if (now() < iter->second.second) {
+				if(iter->second.first >= FLOW_KNOBS->TLS_SERVER_CONNECTION_THROTTLE_ATTEMPTS) {
+					TraceEvent("TLSIncomingConnectionThrottlingWarning").suppressFor(1.0).detail("PeerIP", peerIP.first.toString());
+					wait(delay(FLOW_KNOBS->CONNECTION_MONITOR_TIMEOUT));
+					self->closeSocket();
+					throw connection_failed();
+				}
+			} else {
+				g_network->networkInfo.serverTLSConnectionThrottler.erase(peerIP);
+			}
+		}
+
+		wait(g_network->networkInfo.handshakeLock->take());
+		state FlowLock::Releaser releaser(*g_network->networkInfo.handshakeLock);
+		
 		Promise<Void> connected;
 		doAcceptHandshake(self, connected);
 		try {
-			wait(connected.getFuture());
-			return Void();
+			choose {
+				when(wait(connected.getFuture())) {
+					return Void();
+				}
+				when(wait(delay(FLOW_KNOBS->CONNECTION_MONITOR_TIMEOUT))) {
+					throw connection_failed();
+				}
+			}
 		} catch (Error& e) {
+			if(e.code() != error_code_actor_cancelled) {
+				auto iter(g_network->networkInfo.serverTLSConnectionThrottler.find(peerIP));
+				if(iter != g_network->networkInfo.serverTLSConnectionThrottler.end()) {
+					iter->second.first++;
+				} else {
+					g_network->networkInfo.serverTLSConnectionThrottler[peerIP] = std::make_pair(0,now() + FLOW_KNOBS->TLS_SERVER_CONNECTION_THROTTLE_TIMEOUT);
+				}
+			}
 			// Either the connection failed, or was cancelled by the caller
 			self->closeSocket();
 			throw;
@@ -704,9 +711,6 @@ public:
 		state Hold<int> holder;
 
 		try {
-			wait(g_network->networkInfo.handshakeLock->take());
-			state FlowLock::Releaser releaser(*g_network->networkInfo.handshakeLock);
-
 			Future<Void> onHandshook;
 			// If the background handshakers are not all busy, use one
 			if(N2::g_net2->sslPoolHandshakesInProgress < N2::g_net2->sslHandshakerThreadsStarted) {
@@ -725,26 +729,37 @@ public:
 			wait(delay(0, TaskPriority::Handshake));
 			connected.send(Void());
 		} catch (...) {
-			std::pair<IPAddress,uint16_t> peerIP = std::make_pair(self->peer_address.ip, self->peer_address.port);
-			auto iter(g_network->networkInfo.serverTLSConnectionThrottler.find(peerIP));
-			if(iter != g_network->networkInfo.serverTLSConnectionThrottler.end()) {
-				iter->second.first++;
-			} else {
-				g_network->networkInfo.serverTLSConnectionThrottler[peerIP] = std::make_pair(0,now() + FLOW_KNOBS->TLS_CLIENT_CONNECTION_THROTTLE_TIMEOUT);
-			}
 			self->closeSocket();
 			connected.sendError(connection_failed());
 		}
 	}
 
 	ACTOR static Future<Void> connectHandshakeWrapper( Reference<SSLConnection> self ) {
+		wait(g_network->networkInfo.handshakeLock->take());
+		state FlowLock::Releaser releaser(*g_network->networkInfo.handshakeLock);
+		
 		Promise<Void> connected;
 		doConnectHandshake(self, connected);
 		try {
-			wait(connected.getFuture());
-			return Void();
+			choose {
+				when(wait(connected.getFuture())) {
+					return Void();
+				}
+				when(wait(delay(FLOW_KNOBS->CONNECTION_MONITOR_TIMEOUT))) {
+					throw connection_failed();
+				}
+			}
 		} catch (Error& e) {
 			// Either the connection failed, or was cancelled by the caller
+			if(e.code() != error_code_actor_cancelled) {
+				std::pair<IPAddress,uint16_t> peerIP = std::make_pair(self->peer_address.ip, self->peer_address.port);
+				auto iter(g_network->networkInfo.serverTLSConnectionThrottler.find(peerIP));
+				if(iter != g_network->networkInfo.serverTLSConnectionThrottler.end()) {
+					iter->second.first++;
+				} else {
+					g_network->networkInfo.serverTLSConnectionThrottler[peerIP] = std::make_pair(0,now() + FLOW_KNOBS->TLS_CLIENT_CONNECTION_THROTTLE_TIMEOUT);
+				}
+			}
 			self->closeSocket();
 			throw;
 		}
@@ -827,9 +842,9 @@ public:
 		return sent;
 	}
 
-	virtual NetworkAddress getPeerAddress() { return peer_address; }
+	virtual NetworkAddress getPeerAddress() const override { return peer_address; }
 
-	virtual UID getDebugID() { return id; }
+	virtual UID getDebugID() const override { return id; }
 
 	tcp::socket& getSocket() { return socket; }
 
@@ -888,7 +903,7 @@ public:
 		return doAccept( this );
 	}
 
-	virtual NetworkAddress getListenAddress() { return listenAddress; }
+	virtual NetworkAddress getListenAddress() const override { return listenAddress; }
 
 private:
 	ACTOR static Future<Reference<IConnection>> doAccept( SSLListener* self ) {
@@ -915,7 +930,7 @@ private:
 struct PromiseTask : public Task, public FastAllocated<PromiseTask> {
 	Promise<Void> promise;
 	PromiseTask() {}
-	explicit PromiseTask( Promise<Void>&& promise ) BOOST_NOEXCEPT : promise(std::move(promise)) {}
+	explicit PromiseTask(Promise<Void>&& promise) noexcept : promise(std::move(promise)) {}
 
 	virtual void operator()() {
 		promise.send(Void());
@@ -1299,7 +1314,7 @@ void Net2::run() {
 			net2backtraces_overflow = false;
 			net2backtraces_count = 0;
 
-			pthread_sigmask(SIG_SETMASK, &orig_set, NULL);
+			pthread_sigmask(SIG_SETMASK, &orig_set, nullptr);
 
 			if (was_overflow) {
 				TraceEvent("Net2RunLoopProfilerOverflow")
@@ -1546,7 +1561,7 @@ Future<std::vector<NetworkAddress>> Net2::resolveTCPEndpoint( std::string host, 
 	return resolveTCPEndpoint_impl(this, host, service);
 }
 
-bool Net2::isAddressOnThisHost( NetworkAddress const& addr ) {
+bool Net2::isAddressOnThisHost(NetworkAddress const& addr) const {
 	auto it = addressOnHostCache.find( addr.ip );
 	if (it != addressOnHostCache.end())
 		return it->second;
@@ -1604,7 +1619,7 @@ Reference<IListener> Net2::listen( NetworkAddress localAddr ) {
 	}
 }
 
-void Net2::getDiskBytes( std::string const& directory, int64_t& free, int64_t& total ) {
+void Net2::getDiskBytes(std::string const& directory, int64_t& free, int64_t& total) {
 	return ::getDiskBytes(directory, free, total);
 }
 
@@ -1644,7 +1659,7 @@ void ASIOReactor::sleep(double sleepTime) {
 			timespec tv;
 			tv.tv_sec = 0;
 			tv.tv_nsec = 20000;
-			nanosleep(&tv, NULL);
+			nanosleep(&tv, nullptr);
 #endif
 		}
 		else
