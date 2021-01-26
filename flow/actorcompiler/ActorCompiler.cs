@@ -419,7 +419,7 @@ namespace actorcompiler
 
             string callback_base_classes = string.Join(", ", callbacks.Select(c=>string.Format("public {0}", c.type)));
             if (callback_base_classes != "") callback_base_classes += ", ";
-            writer.WriteLine("class {0} : public Actor<{2}>, {3}public FastAllocated<{1}>, public {4} {{",
+            writer.WriteLine("class {0} : public Actor<{2}>, {3}public {4} {{",
                 className,
                 fullClassName,
                 actor.returnType == null ? "void" : actor.returnType,
@@ -427,8 +427,6 @@ namespace actorcompiler
                 fullStateClassName
                 );
             writer.WriteLine("public:");
-            writer.WriteLine("\tusing FastAllocated<{0}>::operator new;", fullClassName);
-            writer.WriteLine("\tusing FastAllocated<{0}>::operator delete;", fullClassName);
             writer.WriteLine("\tvirtual void destroy() {{ ((Actor<{0}>*)this)->~Actor(); operator delete(this); }}", actor.returnType == null ? "void" : actor.returnType);
             foreach (var cb in callbacks)
                 writer.WriteLine("friend struct {0};", cb.type);
