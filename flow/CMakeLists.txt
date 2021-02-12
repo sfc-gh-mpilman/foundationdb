@@ -38,6 +38,8 @@ set(FLOW_SRCS
   JsonTraceLogFormatter.h
   Knobs.cpp
   Knobs.h
+  LineageProperties.h
+  LineageProperties.cpp
   MetricSample.h
   Net2.actor.cpp
   Net2Packet.cpp

@@ -23,6 +23,7 @@
 #include "flow/UnitTest.h"
 #include "flow/rte_memcpy.h"
 #include "flow/folly_memcpy.h"
+#include "flow/LineageProperties.h"
 #include <stdarg.h>
 #include <cinttypes>
 
