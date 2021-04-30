@@ -95,7 +95,7 @@ class SampleSender : public std::enable_shared_from_this<SampleSender<Protocol, 
 		} else {
 			size = waitState.size() + 2;
 		}
-		size += iter->second.second;
+		size += iter->second.size();
 		// 2. allocate the buffer
 		std::unique_ptr<char[]> buf(new char[size]);
 		unsigned off = 0;
@@ -111,7 +111,7 @@ class SampleSender : public std::enable_shared_from_this<SampleSender<Protocol, 
 		memcpy(buf.get() + off, waitState.data(), waitState.size());
 		off += waitState.size();
 		// 3.2 append serialized value
-		memcpy(buf.get() + off, iter->second.first, iter->second.second);
+		memcpy(buf.get() + off, iter->second.data(), iter->second.size());
 		// 4. send the result to fluentd
 		send(socket, std::make_shared<Buf>(buf.release(), size));
 	}
