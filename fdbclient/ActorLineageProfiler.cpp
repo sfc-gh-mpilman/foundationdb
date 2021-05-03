@@ -151,9 +151,12 @@ public:
 		}
 	}
 
-	std::pair<char*, unsigned> getbuf() {
+	std::string getbuf() {
 		unsigned size = sbuffer.size();
-		return std::make_pair(sbuffer.release(), size);
+		char* buf = sbuffer.release();
+		auto string = std::string(buf, size);
+		delete buf;
+		return string;
 	}
 };
 

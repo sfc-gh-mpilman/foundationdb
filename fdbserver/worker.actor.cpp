@@ -2063,9 +2063,9 @@ ACTOR Future<Void> serveProcess() {
 				std::vector<SerializedSample> serializedSamples;
 				for (const auto& samplePtr : samples) {
 					auto serialized = SerializedSample{ .time = samplePtr->time };
-					for (const auto& [waitState, pair] : samplePtr->data) {
+					for (const auto& [waitState, data] : samplePtr->data) {
 						if (waitState >= req.waitStateStart && waitState <= req.waitStateEnd) {
-							serialized.data[waitState] = std::string(pair.first, pair.second);
+							serialized.data[waitState] = data;
 						}
 					}
 					serializedSamples.push_back(std::move(serialized));
